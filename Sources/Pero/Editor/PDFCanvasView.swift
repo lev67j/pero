@@ -30,7 +30,33 @@ final class PDFCanvasView: NSView, PDFPageOverlayViewProvider {
 
         NotificationCenter.default.addObserver(self, selector: #selector(scaleChanged),
                                                name: .PDFViewScaleChanged, object: pdfView)
+        NotificationCenter.default.addObserver(self, selector: #selector(pageChanged),
+                                               name: .PDFViewPageChanged, object: pdfView)
     }
+
+    /// Current page index and page count, whenever the visible page changes.
+    var onPageChanged: ((Int, Int) -> Void)?
+
+    @objc private func pageChanged() {
+        // Reported on the next turn: this also fires while SwiftUI is updating the view.
+        DispatchQueue.main.async { [weak self] in
+            guard let self, let document = pdfView.document, let page = pdfView.currentPage else { return }
+            onPageChanged?(document.index(for: page), document.pageCount)
+        }
+    }
+
+    /// One page at a time, or all pages as one long scroll.
+    func setSinglePage(_ single: Bool) {
+        let mode: PDFDisplayMode = single ? .singlePage : .singlePageContinuous
+        guard pdfView.displayMode != mode else { return }
+        let page = pdfView.currentPage
+        pdfView.displayMode = mode
+        pdfView.autoScales = true
+        if let page { pdfView.go(to: page) }
+    }
+
+    func goToNextPage() { pdfView.goToNextPage(nil) }
+    func goToPreviousPage() { pdfView.goToPreviousPage(nil) }
 
     required init?(coder: NSCoder) {
         fatalError("init(coder:) is not supported")
@@ -43,6 +69,7 @@ final class PDFCanvasView: NSView, PDFPageOverlayViewProvider {
         pdfView.document = session.document
         pdfView.autoScales = true
         window?.makeFirstResponder(pdfView)
+        pageChanged()
     }
 
     /// Redraws a page after a stroke was added or removed, and scrolls to it if it is off-screen.
@@ -88,23 +115,34 @@ final class PDFCanvasView: NSView, PDFPageOverlayViewProvider {
 
 struct PDFCanvas: NSViewRepresentable {
     let session: InkSession
-    let isPenEnabled: Bool
+    let tool: InkTool
+    let singlePage: Bool
     let penWidth: Double
     let penColor: NSColor
     let onStroke: (PDFPage, [CGPoint]) -> Void
+    let onPageChanged: (Int, Int) -> Void
+    let onLeaveTrackpad: () -> Void
     let onAppear: (PDFCanvasView) -> Void
 
     func makeNSView(context: Context) -> PDFCanvasView {
         let view = PDFCanvasView(frame: .zero)
+        view.setSinglePage(singlePage)
         onAppear(view)
         return view
     }
 
     func updateNSView(_ view: PDFCanvasView, context: Context) {
+        view.onPageChanged = onPageChanged
         view.show(session)
-        view.overlay.isDrawingEnabled = isPenEnabled
+        view.setSinglePage(singlePage)
         view.overlay.penWidth = penWidth
         view.overlay.penColor = penColor
         view.overlay.onStrokeFinished = onStroke
+        view.overlay.onLeaveTrackpad = onLeaveTrackpad
+        switch tool {
+        case .pen: view.overlay.mode = .pen
+        case .trackpad: view.overlay.mode = .trackpad
+        case .cursor: view.overlay.mode = .off
+        }
     }
 }

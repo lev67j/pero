@@ -2,17 +2,34 @@ import SwiftUI
 
 struct EditorView: View {
     @EnvironmentObject private var model: AppModel
-    @State private var showsPenSettings = false
+    @State private var showsPalette = false
+    @State private var showsPenWidth = false
 
     var body: some View {
         Group {
             if let session = model.session {
                 PDFCanvas(session: session,
-                          isPenEnabled: model.isPenEnabled,
+                          tool: model.tool,
+                          singlePage: model.singlePageMode,
                           penWidth: model.penWidth,
                           penColor: NSColor(hex: model.penColor) ?? .black,
                           onStroke: { page, points in model.addStroke(on: page, points: points) },
+                          onPageChanged: { index, count in model.pageChanged(to: index, of: count) },
+                          onLeaveTrackpad: { model.tool = .pen },
                           onAppear: { model.canvas = $0 })
+                    .overlay(alignment: .trailing) {
+                        if model.pageCount > 1 {
+                            PageNavigator()
+                                .padding(.trailing, 16)
+                        }
+                    }
+                    .overlay(alignment: .top) {
+                        if model.tool == .trackpad {
+                            TrackpadHint()
+                                .padding(.top, 12)
+                                .allowsHitTesting(false)
+                        }
+                    }
             } else {
                 EmptyEditorView()
             }
@@ -24,22 +41,42 @@ struct EditorView: View {
         }
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
-                Picker("Инструмент", selection: $model.isPenEnabled) {
-                    Image(systemName: "pencil.tip").tag(true).help("Перо: писать и рисовать")
-                    Image(systemName: "cursorarrow").tag(false).help("Курсор: выделять текст и переходить по ссылкам")
+                Picker("Инструмент", selection: $model.tool) {
+                    Image(systemName: "pencil.tip").tag(InkTool.pen)
+                        .help("Перо: рисует мышью и пером планшета, пока нажата кнопка (⌘D)")
+                    Image(systemName: "hand.point.up.left").tag(InkTool.trackpad)
+                        .help("Палец: трекпад как планшет — касание рисует, два пальца прокручивают (⌘T)")
+                    Image(systemName: "cursorarrow").tag(InkTool.cursor)
+                        .help("Курсор: выделять текст и переходить по ссылкам (⌘D)")
                 }
                 .pickerStyle(.segmented)
                 .disabled(model.session == nil)
             }
             ToolbarItem(placement: .primaryAction) {
                 Button {
-                    showsPenSettings.toggle()
+                    showsPalette.toggle()
+                } label: {
+                    Label {
+                        Text("Цвет")
+                    } icon: {
+                        Image(nsImage: colorSwatch(model.penColor))
+                    }
+                }
+                .help("Цвет линии")
+                .popover(isPresented: $showsPalette, arrowEdge: .bottom) {
+                    PaletteView()
+                        .environmentObject(model)
+                }
+            }
+            ToolbarItem(placement: .primaryAction) {
+                Button {
+                    showsPenWidth.toggle()
                 } label: {
                     Label("Толщина линии", systemImage: "lineweight")
                 }
-                .help("Толщина и цвет линии")
-                .popover(isPresented: $showsPenSettings, arrowEdge: .bottom) {
-                    PenSettingsView()
+                .help("Толщина линии")
+                .popover(isPresented: $showsPenWidth, arrowEdge: .bottom) {
+                    PenWidthView()
                         .environmentObject(model)
                 }
             }
@@ -61,6 +98,16 @@ struct EditorView: View {
                 .disabled(!model.canRedo)
             }
             ToolbarItem(placement: .primaryAction) {
+                Picker("Вид", selection: $model.singlePageMode) {
+                    Image(systemName: "scroll").tag(false)
+                        .help("Лентой: все страницы подряд (⌘1)")
+                    Image(systemName: "book.pages").tag(true)
+                        .help("По страницам: одна страница за раз (⌘2)")
+                }
+                .pickerStyle(.segmented)
+                .disabled(model.session == nil)
+            }
+            ToolbarItem(placement: .primaryAction) {
                 Button {
                     model.exportCurrentDocument()
                 } label: {
@@ -70,51 +117,6 @@ struct EditorView: View {
                 .disabled(model.session == nil)
             }
         }
-    }
-}
-
-struct PenSettingsView: View {
-    @EnvironmentObject private var model: AppModel
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text("Толщина линии")
-                .font(.headline)
-            HStack(spacing: 12) {
-                Slider(value: $model.penWidth, in: 0.5...12)
-                Text(String(format: "%.1f", model.penWidth))
-                    .monospacedDigit()
-                    .foregroundStyle(.secondary)
-                    .frame(width: 34, alignment: .trailing)
-            }
-            Capsule()
-                .fill(Color(nsColor: NSColor(hex: model.penColor) ?? .black))
-                .frame(height: max(1, model.penWidth * 1.5))
-                .frame(height: 20)
-            Divider()
-            Text("Цвет")
-                .font(.headline)
-            HStack(spacing: 10) {
-                ForEach(AppModel.penColors, id: \.self) { hex in
-                    Button {
-                        model.penColor = hex
-                    } label: {
-                        Circle()
-                            .fill(Color(nsColor: NSColor(hex: hex) ?? .black))
-                            .frame(width: 22, height: 22)
-                            .overlay(
-                                Circle()
-                                    .strokeBorder(Color.accentColor, lineWidth: model.penColor == hex ? 2.5 : 0)
-                                    .padding(-4)
-                            )
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-            .padding(.horizontal, 4)
-        }
-        .padding(16)
-        .frame(width: 250)
     }
 }
 

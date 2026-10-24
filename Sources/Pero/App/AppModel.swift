@@ -27,15 +27,36 @@ final class AppModel: ObservableObject {
     /// Path of a just-created folder whose name the sidebar should ask for.
     @Published var renameRequest: String?
 
-    @Published var isPenEnabled = true
+    @Published var tool: InkTool = .pen
+    /// One page at a time instead of one long scroll.
+    @Published var singlePageMode: Bool {
+        didSet { UserDefaults.standard.set(singlePageMode, forKey: "singlePageMode") }
+    }
+    @Published private(set) var currentPage = 0
+    @Published private(set) var pageCount = 0
+
     @Published var penWidth: Double {
         didSet { UserDefaults.standard.set(penWidth, forKey: "penWidth") }
     }
     @Published var penColor: String {
         didSet { UserDefaults.standard.set(penColor, forKey: "penColor") }
     }
+    /// Colors the user picked in the system color panel and saved to the palette.
+    @Published private(set) var customPenColors: [String] {
+        didSet { UserDefaults.standard.set(customPenColors, forKey: "customPenColors") }
+    }
 
-    static let penColors = ["#1C1C1E", "#0A58CA", "#D0312D", "#1E8E3E", "#7B3FC4"]
+    /// The colors Apple uses across its apps (system colors and their darker
+    /// high-contrast variants), plus black, graphite, gray and white for ink.
+    static let penColors: [PenColor] = [
+        PenColor("#1C1C1E", "Чёрный"), PenColor("#48484A", "Графит"), PenColor("#8E8E93", "Серый"),
+        PenColor("#FFFFFF", "Белый"), PenColor("#A2845E", "Коричневый"), PenColor("#FF3B30", "Красный"),
+        PenColor("#FF9500", "Оранжевый"), PenColor("#FFCC00", "Жёлтый"), PenColor("#34C759", "Зелёный"),
+        PenColor("#00C7BE", "Мятный"), PenColor("#30B0C7", "Бирюзовый"), PenColor("#32ADE6", "Голубой"),
+        PenColor("#007AFF", "Синий"), PenColor("#5856D6", "Индиго"), PenColor("#AF52DE", "Фиолетовый"),
+        PenColor("#FF2D55", "Розовый"), PenColor("#D70015", "Тёмно-красный"), PenColor("#248A3D", "Тёмно-зелёный"),
+        PenColor("#0040DD", "Тёмно-синий"), PenColor("#8944AB", "Тёмно-фиолетовый"),
+    ]
 
     weak var canvas: PDFCanvasView?
     private var autosaveTimer: Timer?
@@ -45,7 +66,9 @@ final class AppModel: ObservableObject {
         let defaults = UserDefaults.standard
         let width = defaults.double(forKey: "penWidth")
         penWidth = width > 0 ? width : 1.5
-        penColor = defaults.string(forKey: "penColor") ?? Self.penColors[0]
+        penColor = defaults.string(forKey: "penColor") ?? Self.penColors[0].hex
+        customPenColors = defaults.stringArray(forKey: "customPenColors") ?? []
+        singlePageMode = defaults.bool(forKey: "singlePageMode")
         expandedFolders = Set(defaults.stringArray(forKey: "expandedFolders") ?? [])
         startAutosave()
     }
@@ -146,6 +169,43 @@ final class AppModel: ObservableObject {
 
     func zoom(by factor: CGFloat) { canvas?.zoom(by: factor) }
     func zoomToFit() { canvas?.zoomToFit() }
+
+    // MARK: - Pages
+
+    func pageChanged(to index: Int, of count: Int) {
+        currentPage = index
+        pageCount = count
+    }
+
+    func nextPage() { canvas?.goToNextPage() }
+    func previousPage() { canvas?.goToPreviousPage() }
+
+    // MARK: - Colors
+
+    /// Saves the current color to "My colors" (newest first).
+    func saveCurrentColor() {
+        let hex = penColor.uppercased()
+        guard !Self.penColors.contains(where: { $0.hex == hex }) else { return }
+        customPenColors.removeAll { $0 == hex }
+        customPenColors.insert(hex, at: 0)
+        if customPenColors.count > 30 { customPenColors.removeLast(customPenColors.count - 30) }
+    }
+
+    func removeCustomColor(_ hex: String) {
+        customPenColors.removeAll { $0 == hex }
+    }
+
+    var isCurrentColorSaved: Bool {
+        let hex = penColor.uppercased()
+        return Self.penColors.contains { $0.hex == hex } || customPenColors.contains(hex)
+    }
+
+    /// Opens the standard macOS color panel; whatever is picked there becomes the pen color.
+    func openColorPanel() {
+        ColorPanelBridge.shared.open(with: NSColor(hex: penColor) ?? .black) { [weak self] color in
+            self?.penColor = color.hexString
+        }
+    }
 
     // MARK: - Library changes
 

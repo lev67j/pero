@@ -61,8 +61,22 @@ struct PeroCommands: Commands {
                 .disabled(!model.canRedo)
         }
         CommandGroup(before: .toolbar) {
-            Button(model.isPenEnabled ? "Курсор" : "Перо") { model.isPenEnabled.toggle() }
+            Button(model.tool == .cursor ? "Перо" : "Курсор") { model.tool = model.tool == .cursor ? .pen : .cursor }
                 .keyboardShortcut("d")
+                .disabled(model.session == nil)
+            Button("Палец по трекпаду") { model.tool = .trackpad }
+                .keyboardShortcut("t")
+                .disabled(model.session == nil)
+            Divider()
+            Button("Лентой") { model.singlePageMode = false }
+                .keyboardShortcut("1")
+            Button("По страницам") { model.singlePageMode = true }
+                .keyboardShortcut("2")
+            Button("Предыдущая страница") { model.previousPage() }
+                .keyboardShortcut(.upArrow, modifiers: [.command, .option])
+                .disabled(model.session == nil)
+            Button("Следующая страница") { model.nextPage() }
+                .keyboardShortcut(.downArrow, modifiers: [.command, .option])
                 .disabled(model.session == nil)
             Divider()
             Button("Увеличить") { model.zoom(by: 1.25) }
