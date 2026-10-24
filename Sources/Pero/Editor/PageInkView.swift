@@ -32,7 +32,7 @@ final class PageInkView: NSView {
         guard let context = NSGraphicsContext.current?.cgContext, let transform = pageTransform else { return }
         context.concatenate(transform)
         for stroke in strokes() where stroke.bounds.applying(transform).intersects(dirtyRect) {
-            InkPath.stroke(stroke.cgPoints, width: stroke.width, color: stroke.nsColor, in: context)
+            stroke.draw(in: context)
         }
     }
 }

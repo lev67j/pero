@@ -11,13 +11,31 @@ struct InkStroke: Codable, Identifiable, Equatable {
     var width: Double
     /// Flattened page coordinates: x0, y0, x1, y1, ...
     var points: [Double]
+    /// `Brush` raw value; missing in files from version 1.0, which only had the pen.
+    var brush: String?
 
-    init(id: UUID = UUID(), page: Int, color: String, width: Double, points: [CGPoint]) {
+    init(id: UUID = UUID(), page: Int, color: String, width: Double, brush: Brush = .pen, points: [CGPoint]) {
         self.id = id
         self.page = page
         self.color = color
         self.width = width
+        self.brush = brush == .pen ? nil : brush.rawValue
         self.points = points.flatMap { [Self.round($0.x), Self.round($0.y)] }
+    }
+
+    var brushKind: Brush { brush.flatMap(Brush.init(rawValue:)) ?? .pen }
+
+    /// Fixed per stroke, so textured brushes always draw the same grain.
+    var seed: UInt64 { Self.seed(for: id) }
+
+    static func seed(for id: UUID) -> UInt64 {
+        withUnsafeBytes(of: id.uuid) { bytes in
+            bytes.enumerated().reduce(UInt64(0)) { $0 ^ (UInt64($1.element) << (UInt64($1.offset % 8) * 8)) }
+        }
+    }
+
+    func draw(in context: CGContext) {
+        InkRenderer.draw(cgPoints, width: CGFloat(width), color: nsColor, brush: brushKind, seed: seed, in: context)
     }
 
     var cgPoints: [CGPoint] {
@@ -34,7 +52,8 @@ struct InkStroke: Codable, Identifiable, Equatable {
             minX = min(minX, p.x); maxX = max(maxX, p.x)
             minY = min(minY, p.y); maxY = max(maxY, p.y)
         }
-        let pad = width / 2 + 2
+        // Brushes can swell to 1.25× their width.
+        let pad = width * 0.65 + 2
         return CGRect(x: minX - pad, y: minY - pad, width: maxX - minX + 2 * pad, height: maxY - minY + 2 * pad)
     }
 

@@ -27,7 +27,7 @@ final class AppModel: ObservableObject {
     /// Path of a just-created folder whose name the sidebar should ask for.
     @Published var renameRequest: String?
 
-    @Published var tool: InkTool = .pen
+    @Published var isPenEnabled = true
     /// One page at a time instead of one long scroll.
     @Published var singlePageMode: Bool {
         didSet { UserDefaults.standard.set(singlePageMode, forKey: "singlePageMode") }
@@ -35,8 +35,16 @@ final class AppModel: ObservableObject {
     @Published private(set) var currentPage = 0
     @Published private(set) var pageCount = 0
 
-    @Published var penWidth: Double {
-        didSet { UserDefaults.standard.set(penWidth, forKey: "penWidth") }
+    @Published var brush: Brush {
+        didSet { UserDefaults.standard.set(brush.rawValue, forKey: "brush") }
+    }
+    /// Each brush remembers its own width.
+    @Published private(set) var brushWidths: [String: Double] {
+        didSet { UserDefaults.standard.set(brushWidths, forKey: "brushWidths") }
+    }
+    var penWidth: Double {
+        get { brushWidths[brush.rawValue] ?? brush.defaultWidth }
+        set { brushWidths[brush.rawValue] = min(max(newValue, brush.widthRange.lowerBound), brush.widthRange.upperBound) }
     }
     @Published var penColor: String {
         didSet { UserDefaults.standard.set(penColor, forKey: "penColor") }
@@ -64,8 +72,12 @@ final class AppModel: ObservableObject {
 
     private init() {
         let defaults = UserDefaults.standard
-        let width = defaults.double(forKey: "penWidth")
-        penWidth = width > 0 ? width : 1.5
+        brush = defaults.string(forKey: "brush").flatMap(Brush.init(rawValue:)) ?? .pen
+        var widths = defaults.dictionary(forKey: "brushWidths") as? [String: Double] ?? [:]
+        // Version 1.0 had a single width, for the pen.
+        let oldWidth = defaults.double(forKey: "penWidth")
+        if widths[Brush.pen.rawValue] == nil, oldWidth > 0 { widths[Brush.pen.rawValue] = oldWidth }
+        brushWidths = widths
         penColor = defaults.string(forKey: "penColor") ?? Self.penColors[0].hex
         customPenColors = defaults.stringArray(forKey: "customPenColors") ?? []
         singlePageMode = defaults.bool(forKey: "singlePageMode")
@@ -148,22 +160,40 @@ final class AppModel: ObservableObject {
 
     // MARK: - Pen
 
-    func addStroke(on page: PDFPage, points: [CGPoint]) {
-        guard let session, let document = page.document, document === session.document else { return }
-        let stroke = InkStroke(page: document.index(for: page), color: penColor, width: penWidth, points: points)
+    func addStroke(on page: PDFPage, points: [CGPoint], id: UUID = UUID()) {
+        guard let session, let document = page.document, document === session.document, brush != .eraser else { return }
+        let stroke = InkStroke(id: id, page: document.index(for: page), color: penColor, width: penWidth,
+                               brush: brush, points: points)
         if let page = session.add(stroke) { canvas?.refresh(page, reveal: false) }
         refreshState()
     }
 
+    func beginErasing() {
+        session?.beginErasing()
+    }
+
+    func erase(on page: PDFPage, from: CGPoint, to: CGPoint, radius: CGFloat) {
+        guard let session, let document = page.document, document === session.document else { return }
+        if session.erase(onPage: document.index(for: page), from: from, to: to, radius: radius) {
+            canvas?.refresh(page, reveal: false)
+            refreshState()
+        }
+    }
+
+    func endErasing() {
+        session?.endErasing()
+        refreshState()
+    }
+
     func undo() {
-        guard let page = session?.undo() else { return }
-        canvas?.refresh(page, reveal: true)
+        guard let pages = session?.undo(), !pages.isEmpty else { return }
+        for (i, page) in pages.enumerated() { canvas?.refresh(page, reveal: i == 0) }
         refreshState()
     }
 
     func redo() {
-        guard let page = session?.redo() else { return }
-        canvas?.refresh(page, reveal: true)
+        guard let pages = session?.redo(), !pages.isEmpty else { return }
+        for (i, page) in pages.enumerated() { canvas?.refresh(page, reveal: i == 0) }
         refreshState()
     }
 
@@ -401,29 +431,127 @@ final class AppModel: ObservableObject {
         }
     }
 
+    // MARK: - Library export folder
+
+    private static let exportBookmarkKey = "exportFolderBookmark"
+
+    /// Where the library was exported to. Remembered as a bookmark, so the folder is
+    /// found again after the user moves or renames it.
+    var exportFolder: URL? {
+        guard let data = UserDefaults.standard.data(forKey: Self.exportBookmarkKey) else { return nil }
+        var stale = false
+        guard let url = try? URL(resolvingBookmarkData: data, options: [.withoutUI], relativeTo: nil, bookmarkDataIsStale: &stale),
+              FileManager.default.fileExists(atPath: url.path),
+              !url.path.contains("/.Trash/") else { return nil }
+        if stale { rememberExportFolder(url) }
+        return url
+    }
+
+    var hasExportFolder: Bool { UserDefaults.standard.data(forKey: Self.exportBookmarkKey) != nil }
+
+    private func rememberExportFolder(_ url: URL) {
+        if let data = try? url.bookmarkData(options: [], includingResourceValuesForKeys: nil, relativeTo: nil) {
+            UserDefaults.standard.set(data, forKey: Self.exportBookmarkKey)
+        }
+        objectWillChange.send()
+    }
+
+    /// One button: updates the export folder if there is one, otherwise creates it on the Desktop.
+    func exportOrUpdateLibrary() {
+        hasExportFolder ? updateExport() : exportLibraryToDesktop()
+    }
+
+    /// A new export folder on the Desktop.
     func exportLibraryToDesktop() {
+        let desktop = FileManager.default.urls(for: .desktopDirectory, in: .userDomainMask)[0]
+        let destination = FileNames.uniqueURL(in: desktop, name: "Перо — библиотека", pathExtension: nil)
+        sync(to: destination, title: "Библиотека выгружена на рабочий стол")
+    }
+
+    /// Writes only what changed since the last export into the existing folder.
+    func updateExport() {
+        guard let folder = exportFolder else {
+            askForLostExportFolder()
+            return
+        }
+        sync(to: folder, title: "Папка с выгрузкой обновлена")
+    }
+
+    private func askForLostExportFolder() {
+        let alert = NSAlert()
+        alert.messageText = "Не нашли папку с выгрузкой"
+        alert.informativeText = "Её могли удалить или перенести на другой диск. Укажите, где она сейчас, — даже если вы её переименовали, — и она обновится. Или выгрузите библиотеку заново."
+        alert.addButton(withTitle: "Указать папку…")
+        alert.addButton(withTitle: "Выгрузить заново")
+        alert.addButton(withTitle: "Отмена")
+        switch alert.runModal() {
+        case .alertFirstButtonReturn: chooseExportFolder()
+        case .alertSecondButtonReturn: exportLibraryToDesktop()
+        default: break
+        }
+    }
+
+    /// Lets the user point at the export folder (moved, renamed) or pick a new one.
+    func chooseExportFolder() {
+        let panel = NSOpenPanel()
+        panel.title = "Папка с выгрузкой"
+        panel.message = "Укажите папку, куда выгружалась библиотека Пера. Её можно было переместить и переименовать."
+        panel.prompt = "Обновить эту папку"
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.canCreateDirectories = true
+        panel.directoryURL = exportFolder?.deletingLastPathComponent()
+            ?? FileManager.default.urls(for: .desktopDirectory, in: .userDomainMask).first
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+
+        let fm = FileManager.default
+        let unsafe = [fm.homeDirectoryForCurrentUser,
+                      fm.urls(for: .desktopDirectory, in: .userDomainMask)[0],
+                      fm.urls(for: .documentDirectory, in: .userDomainMask)[0],
+                      URL(fileURLWithPath: "/")].map(\.standardizedFileURL.path)
+        let path = url.standardizedFileURL.path
+        if unsafe.contains(path) {
+            showAlert("Выберите отдельную папку",
+                      "Библиотека выгружается в одну папку. Создайте для неё новую папку (кнопка «Новая папка» в окне выбора) или выберите ту, куда уже выгружали.")
+            return
+        }
+        if path == library.rootURL.standardizedFileURL.path || path.hasPrefix(library.rootURL.standardizedFileURL.path + "/") {
+            showAlert("Эта папка внутри библиотеки", "Выберите папку вне библиотеки Пера, например на рабочем столе.")
+            return
+        }
+        if !LibraryExport.isExportFolder(url) {
+            let isEmpty = ((try? fm.contentsOfDirectory(atPath: url.path)) ?? []).allSatisfy { $0.hasPrefix(".") }
+            if !isEmpty {
+                let confirm = NSAlert()
+                confirm.messageText = "В этой папке нет выгрузки Пера"
+                confirm.informativeText = "Выгрузить библиотеку в «\(url.lastPathComponent)»? Ваши файлы в ней останутся на месте; PDF с такими же именами, как у документов библиотеки, переместятся в Корзину."
+                confirm.addButton(withTitle: "Выгрузить сюда")
+                confirm.addButton(withTitle: "Отмена")
+                guard confirm.runModal() == .alertFirstButtonReturn else { return }
+            }
+        }
+        sync(to: url, title: "Папка с выгрузкой обновлена")
+    }
+
+    private func sync(to destination: URL, title: String) {
         guard !isExportingLibrary else { return }
         saveNow()
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyy-MM-dd HH.mm"
-        let desktop = FileManager.default.urls(for: .desktopDirectory, in: .userDomainMask)[0]
-        let destination = FileNames.uniqueURL(in: desktop, name: "Перо — библиотека \(formatter.string(from: Date()))",
-                                              pathExtension: nil)
         let root = library.rootURL
         isExportingLibrary = true
         Task.detached(priority: .userInitiated) {
-            let result = Result { try Exporter.exportLibrary(from: root, to: destination) }
+            let result = Result { try LibraryExport.sync(library: root, to: destination) }
             await MainActor.run {
                 let model = AppModel.shared
                 model.isExportingLibrary = false
                 switch result {
-                case .success(let count):
+                case .success(let summary):
+                    model.rememberExportFolder(destination)
                     let alert = NSAlert()
-                    alert.messageText = "Библиотека выгружена на рабочий стол"
-                    alert.informativeText = "Папка «\(destination.lastPathComponent)», PDF-файлов: \(count). Все папки и подпапки сохранены."
-                    alert.addButton(withTitle: "Показать в Finder")
+                    alert.messageText = summary.changedAnything || summary.unchanged == 0 ? title : "Папка с выгрузкой уже актуальна"
+                    alert.informativeText = model.describe(summary, folder: destination)
                     alert.addButton(withTitle: "Готово")
-                    if alert.runModal() == .alertFirstButtonReturn {
+                    alert.addButton(withTitle: "Показать в Finder")
+                    if alert.runModal() == .alertSecondButtonReturn {
                         NSWorkspace.shared.activateFileViewerSelecting([destination])
                     }
                 case .failure(let error):
@@ -431,6 +559,17 @@ final class AppModel: ObservableObject {
                 }
             }
         }
+    }
+
+    private func describe(_ s: LibraryExport.Summary, folder: URL) -> String {
+        var parts: [String] = []
+        if s.added > 0 { parts.append("новых файлов: \(s.added)") }
+        if s.updated > 0 { parts.append("обновлено: \(s.updated)") }
+        if s.removed > 0 { parts.append("убрано в Корзину: \(s.removed)") }
+        if s.unchanged > 0 { parts.append("без изменений: \(s.unchanged)") }
+        let counts = parts.isEmpty ? "Библиотека пуста." : parts.joined(separator: ", ").prefix(1).uppercased() + parts.joined(separator: ", ").dropFirst() + "."
+        let place = (folder.path as NSString).abbreviatingWithTildeInPath
+        return "\(counts)\n\nПапка: \(place)\nЕё можно перемещать и переименовывать — кнопка «Обновить» всё равно её найдёт."
     }
 
     func revealLibraryInFinder() {

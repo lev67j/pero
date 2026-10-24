@@ -1,15 +1,6 @@
 import AppKit
 import SwiftUI
 
-enum InkTool: Hashable {
-    /// Graphics tablet pen or mouse: draws while pressed.
-    case pen
-    /// Finger on the trackpad, which works like a small tablet.
-    case trackpad
-    /// Select text and follow links.
-    case cursor
-}
-
 struct PenColor: Hashable {
     let hex: String
     let name: String
@@ -156,28 +147,99 @@ struct PaletteView: View {
     }
 }
 
-struct PenWidthView: View {
+/// The drawing tool and its width, with a sample of how it draws.
+struct BrushPickerView: View {
     @EnvironmentObject private var model: AppModel
+    private let columns = Array(repeating: GridItem(.flexible(), spacing: 6), count: 5)
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text("Толщина линии")
+            Text("Инструмент")
+                .font(.headline)
+            LazyVGrid(columns: columns, spacing: 6) {
+                ForEach(Brush.allCases) { brush in
+                    Button {
+                        model.brush = brush
+                        model.isPenEnabled = true
+                    } label: {
+                        VStack(spacing: 5) {
+                            Image(systemName: brush.symbol)
+                                .font(.system(size: 18))
+                                .frame(height: 22)
+                            Text(brush.name)
+                                .font(.system(size: 10.5))
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.8)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 8)
+                        .foregroundStyle(model.brush == brush ? Color.white : Color.primary)
+                        .background(
+                            RoundedRectangle(cornerRadius: 9)
+                                .fill(model.brush == brush ? Color.accentColor : Color.primary.opacity(0.06))
+                        )
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+
+            Divider()
+
+            Text(model.brush == .eraser ? "Размер ластика" : "Толщина")
                 .font(.headline)
             HStack(spacing: 12) {
-                Slider(value: $model.penWidth, in: 0.5...12)
+                Slider(value: Binding(get: { model.penWidth }, set: { model.penWidth = $0 }), in: model.brush.widthRange)
                 Text(String(format: "%.1f", model.penWidth))
                     .monospacedDigit()
                     .foregroundStyle(.secondary)
                     .frame(width: 34, alignment: .trailing)
             }
-            Capsule()
-                .fill(Color(nsColor: NSColor(hex: model.penColor) ?? .black))
-                .overlay(Capsule().strokeBorder(Color.primary.opacity(0.15), lineWidth: 0.5))
-                .frame(height: max(1, model.penWidth * 1.5))
-                .frame(height: 20)
+
+            BrushPreview(brush: model.brush, width: model.penWidth, color: model.penColor)
+                .frame(height: 64)
+                .background(RoundedRectangle(cornerRadius: 9).fill(Color.white))
+                .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(Color.primary.opacity(0.1), lineWidth: 0.5))
         }
         .padding(16)
-        .frame(width: 250)
+        .frame(width: 330)
+    }
+}
+
+/// A sample stroke drawn with the real renderer.
+struct BrushPreview: View {
+    let brush: Brush
+    let width: Double
+    let color: String
+
+    var body: some View {
+        Canvas { context, size in
+            context.withCGContext { cg in
+                // Canvas is flipped; the renderer doesn't care, the wave is symmetric.
+                if brush == .eraser {
+                    let d = min(CGFloat(width), size.height - 12)
+                    cg.setStrokeColor(NSColor.secondaryLabelColor.cgColor)
+                    cg.setLineWidth(1)
+                    cg.strokeEllipse(in: CGRect(x: size.width / 2 - d / 2, y: size.height / 2 - d / 2, width: d, height: d))
+                    return
+                }
+                let points = stride(from: 0.0, through: 1.0, by: 0.01).map { t -> CGPoint in
+                    let x = 20 + (size.width - 40) * t
+                    let y = size.height / 2 + sin(t * .pi * 2.4) * (size.height * 0.22) * (0.6 + 0.4 * t)
+                    return CGPoint(x: x, y: y)
+                }
+                InkRenderer.draw(points, width: CGFloat(min(width, Double(size.height) * 0.45)),
+                                 color: NSColor(hex: color) ?? .black, brush: brush, seed: 7, in: cg)
+            }
+        }
+        .overlay(alignment: .center) {
+            if brush == .eraser {
+                Text("Стирает штрихи целиком")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .offset(y: 22)
+            }
+        }
     }
 }
 
@@ -222,22 +284,6 @@ struct PageNavigator: View {
         }
         .buttonStyle(.borderless)
         .padding(.vertical, 6)
-        .background(.regularMaterial, in: Capsule())
-        .overlay(Capsule().strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.5))
-        .shadow(color: .black.opacity(0.12), radius: 8, y: 2)
-    }
-}
-
-/// Shown on top of the page while the finger tool is on.
-struct TrackpadHint: View {
-    var body: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "hand.point.up.left")
-            Text("Пишите пальцем по трекпаду · два пальца — прокрутка · Esc — выйти")
-        }
-        .font(.callout)
-        .padding(.horizontal, 14)
-        .padding(.vertical, 8)
         .background(.regularMaterial, in: Capsule())
         .overlay(Capsule().strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.5))
         .shadow(color: .black.opacity(0.12), radius: 8, y: 2)

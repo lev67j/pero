@@ -82,6 +82,7 @@ final class PDFCanvasView: NSView, PDFPageOverlayViewProvider {
 
     @objc private func scaleChanged() {
         for view in inkViews.values { view.needsDisplay = true }
+        overlay.updateCursor()
     }
 
     func zoom(by factor: CGFloat) {
@@ -115,13 +116,16 @@ final class PDFCanvasView: NSView, PDFPageOverlayViewProvider {
 
 struct PDFCanvas: NSViewRepresentable {
     let session: InkSession
-    let tool: InkTool
+    let isPenEnabled: Bool
     let singlePage: Bool
+    let brush: Brush
     let penWidth: Double
     let penColor: NSColor
-    let onStroke: (PDFPage, [CGPoint]) -> Void
+    let onStroke: (PDFPage, [CGPoint], UUID) -> Void
+    let onEraseBegan: () -> Void
+    let onErase: (PDFPage, CGPoint, CGPoint, CGFloat) -> Void
+    let onEraseEnded: () -> Void
     let onPageChanged: (Int, Int) -> Void
-    let onLeaveTrackpad: () -> Void
     let onAppear: (PDFCanvasView) -> Void
 
     func makeNSView(context: Context) -> PDFCanvasView {
@@ -135,14 +139,16 @@ struct PDFCanvas: NSViewRepresentable {
         view.onPageChanged = onPageChanged
         view.show(session)
         view.setSinglePage(singlePage)
-        view.overlay.penWidth = penWidth
-        view.overlay.penColor = penColor
-        view.overlay.onStrokeFinished = onStroke
-        view.overlay.onLeaveTrackpad = onLeaveTrackpad
-        switch tool {
-        case .pen: view.overlay.mode = .pen
-        case .trackpad: view.overlay.mode = .trackpad
-        case .cursor: view.overlay.mode = .off
-        }
+        let overlay = view.overlay
+        let cursorChanged = overlay.brush != brush || overlay.penWidth != penWidth
+        overlay.isDrawingEnabled = isPenEnabled
+        overlay.brush = brush
+        overlay.penWidth = penWidth
+        overlay.penColor = penColor
+        overlay.onStrokeFinished = onStroke
+        overlay.onEraseBegan = onEraseBegan
+        overlay.onErase = onErase
+        overlay.onEraseEnded = onEraseEnded
+        if cursorChanged { overlay.updateCursor() }
     }
 }

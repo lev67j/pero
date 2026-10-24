@@ -49,7 +49,15 @@ struct PeroCommands: Commands {
             Button("Экспортировать PDF…") { model.exportCurrentDocument() }
                 .keyboardShortcut("e")
                 .disabled(model.session == nil)
-            Button("Выгрузить библиотеку на рабочий стол") { model.exportLibraryToDesktop() }
+            Divider()
+            Button(model.hasExportFolder ? "Обновить папку с выгрузкой" : "Выгрузить библиотеку на рабочий стол") {
+                model.exportOrUpdateLibrary()
+            }
+            .keyboardShortcut("u", modifiers: [.command, .shift])
+            .disabled(model.isExportingLibrary)
+            Button("Выгрузить в новую папку на рабочем столе") { model.exportLibraryToDesktop() }
+                .disabled(model.isExportingLibrary)
+            Button("Указать папку с выгрузкой…") { model.chooseExportFolder() }
                 .disabled(model.isExportingLibrary)
         }
         CommandGroup(replacing: .undoRedo) {
@@ -61,12 +69,15 @@ struct PeroCommands: Commands {
                 .disabled(!model.canRedo)
         }
         CommandGroup(before: .toolbar) {
-            Button(model.tool == .cursor ? "Перо" : "Курсор") { model.tool = model.tool == .cursor ? .pen : .cursor }
+            Button(model.isPenEnabled ? "Курсор" : "Перо") { model.isPenEnabled.toggle() }
                 .keyboardShortcut("d")
                 .disabled(model.session == nil)
-            Button("Палец по трекпаду") { model.tool = .trackpad }
-                .keyboardShortcut("t")
-                .disabled(model.session == nil)
+            Button(model.brush == .eraser ? "Убрать ластик" : "Ластик") {
+                model.brush = model.brush == .eraser ? .pen : .eraser
+                model.isPenEnabled = true
+            }
+            .keyboardShortcut("e", modifiers: [.command, .shift])
+            .disabled(model.session == nil)
             Divider()
             Button("Лентой") { model.singlePageMode = false }
                 .keyboardShortcut("1")

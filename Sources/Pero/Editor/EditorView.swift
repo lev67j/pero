@@ -3,31 +3,27 @@ import SwiftUI
 struct EditorView: View {
     @EnvironmentObject private var model: AppModel
     @State private var showsPalette = false
-    @State private var showsPenWidth = false
+    @State private var showsBrushes = false
 
     var body: some View {
         Group {
             if let session = model.session {
                 PDFCanvas(session: session,
-                          tool: model.tool,
+                          isPenEnabled: model.isPenEnabled,
                           singlePage: model.singlePageMode,
+                          brush: model.brush,
                           penWidth: model.penWidth,
                           penColor: NSColor(hex: model.penColor) ?? .black,
-                          onStroke: { page, points in model.addStroke(on: page, points: points) },
+                          onStroke: { page, points, id in model.addStroke(on: page, points: points, id: id) },
+                          onEraseBegan: { model.beginErasing() },
+                          onErase: { page, from, to, radius in model.erase(on: page, from: from, to: to, radius: radius) },
+                          onEraseEnded: { model.endErasing() },
                           onPageChanged: { index, count in model.pageChanged(to: index, of: count) },
-                          onLeaveTrackpad: { model.tool = .pen },
                           onAppear: { model.canvas = $0 })
                     .overlay(alignment: .trailing) {
                         if model.pageCount > 1 {
                             PageNavigator()
                                 .padding(.trailing, 16)
-                        }
-                    }
-                    .overlay(alignment: .top) {
-                        if model.tool == .trackpad {
-                            TrackpadHint()
-                                .padding(.top, 12)
-                                .allowsHitTesting(false)
                         }
                     }
             } else {
@@ -41,12 +37,10 @@ struct EditorView: View {
         }
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
-                Picker("Инструмент", selection: $model.tool) {
-                    Image(systemName: "pencil.tip").tag(InkTool.pen)
-                        .help("Перо: рисует мышью и пером планшета, пока нажата кнопка (⌘D)")
-                    Image(systemName: "hand.point.up.left").tag(InkTool.trackpad)
-                        .help("Палец: трекпад как планшет — касание рисует, два пальца прокручивают (⌘T)")
-                    Image(systemName: "cursorarrow").tag(InkTool.cursor)
+                Picker("Режим", selection: $model.isPenEnabled) {
+                    Image(systemName: "pencil.tip").tag(true)
+                        .help("Рисовать (⌘D)")
+                    Image(systemName: "cursorarrow").tag(false)
                         .help("Курсор: выделять текст и переходить по ссылкам (⌘D)")
                 }
                 .pickerStyle(.segmented)
@@ -70,13 +64,13 @@ struct EditorView: View {
             }
             ToolbarItem(placement: .primaryAction) {
                 Button {
-                    showsPenWidth.toggle()
+                    showsBrushes.toggle()
                 } label: {
-                    Label("Толщина линии", systemImage: "lineweight")
+                    Label("Инструмент: \(model.brush.name)", systemImage: model.brush.symbol)
                 }
-                .help("Толщина линии")
-                .popover(isPresented: $showsPenWidth, arrowEdge: .bottom) {
-                    PenWidthView()
+                .help("Инструмент и толщина: \(model.brush.name)")
+                .popover(isPresented: $showsBrushes, arrowEdge: .bottom) {
+                    BrushPickerView()
                         .environmentObject(model)
                 }
             }

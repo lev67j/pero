@@ -27,38 +27,12 @@ enum Exporter {
             context.saveGState()
             page.transform(context, for: .cropBox)
             for stroke in strokes where stroke.page == index {
-                InkPath.stroke(stroke.cgPoints, width: stroke.width, color: stroke.nsColor, in: context)
+                stroke.draw(in: context)
             }
             context.restoreGState()
             context.endPage()
         }
         context.closePDF()
         return data as Data
-    }
-
-    /// Copies the whole library — folders, subfolders, names — into `destination`,
-    /// writing every document as `<name>.pdf` with its handwriting. Returns the number of PDFs.
-    @discardableResult
-    static func exportLibrary(from root: URL, to destination: URL) throws -> Int {
-        let fm = FileManager.default
-        try fm.createDirectory(at: destination, withIntermediateDirectories: true)
-        var count = 0
-        let names = try fm.contentsOfDirectory(atPath: root.path).sorted()
-        for name in names where !name.hasPrefix(".") {
-            let source = root.appendingPathComponent(name, isDirectory: true)
-            var isDir: ObjCBool = false
-            guard fm.fileExists(atPath: source.path, isDirectory: &isDir), isDir.boolValue else { continue }
-            if DocumentPackage.isPackage(source) {
-                let pdf = try flattenedPDF(package: source)
-                let target = FileNames.uniqueURL(in: destination, name: source.deletingPathExtension().lastPathComponent,
-                                                 pathExtension: "pdf", isDirectory: false)
-                try pdf.write(to: target, options: .atomic)
-                count += 1
-            } else {
-                let folder = FileNames.uniqueURL(in: destination, name: name, pathExtension: nil)
-                count += try exportLibrary(from: source, to: folder)
-            }
-        }
-        return count
     }
 }

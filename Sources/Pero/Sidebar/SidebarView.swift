@@ -41,6 +41,24 @@ struct SidebarView: View {
                 }
                 .help("Добавить файлы (⌘O)")
                 Spacer()
+                Menu {
+                    Button(model.hasExportFolder ? "Обновить папку с выгрузкой" : "Выгрузить на рабочий стол") {
+                        model.exportOrUpdateLibrary()
+                    }
+                    Button("Выгрузить в новую папку на рабочем столе") { model.exportLibraryToDesktop() }
+                    Button("Указать папку с выгрузкой…") { model.chooseExportFolder() }
+                } label: {
+                    Label("Выгрузка", systemImage: model.hasExportFolder ? "arrow.triangle.2.circlepath" : "square.and.arrow.up.on.square")
+                } primaryAction: {
+                    model.exportOrUpdateLibrary()
+                }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .disabled(model.isExportingLibrary)
+                .help(model.hasExportFolder
+                      ? "Обновить папку с выгрузкой: допишутся только новые и изменённые файлы (⇧⌘U)"
+                      : "Выгрузить всю библиотеку одной папкой на рабочий стол (⇧⌘U)")
             }
             .labelStyle(.iconOnly)
             .buttonStyle(.borderless)
